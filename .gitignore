@@ -1,0 +1,30 @@
+.DS_Store
+
+# Java
+target/
+*.iml
+.idea/
+
+# Node / Vue
+node_modules/
+dist/
+.vite/
+
+# Python
+__pycache__/
+.venv/
+venv/
+*.pyc
+
+# Local secrets
+config/application-prod.yml
+**/config/application-prod.yml
+**/src/main/resources/application-prod.yml
+.env
+.env.*
+!.env.example
+
+# Logs and runtime files
+logs/
+*.log
+tmp/

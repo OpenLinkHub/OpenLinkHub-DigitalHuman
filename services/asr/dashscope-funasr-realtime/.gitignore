@@ -1,0 +1,12 @@
+target/
+.idea/
+*.iml
+.DS_Store
+
+# Local secret-bearing Spring profiles
+src/main/resources/application-prod.yml
+config/application-prod.yml
+
+# Frontend generated files
+frontend/node_modules/
+frontend/dist/

@@ -1,0 +1,39 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: dashscope-funasr-realtime
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+  profiles:
+    active: prod
+
+dashscope:
+  funasr:
+    model: fun-asr-realtime
+    format: pcm
+    sample-rate: 16000
+    chunk-size-bytes: 3200
+    frame-interval-ms: 100
+    callback-timeout-seconds: 60
+    disfluency-removal-enabled: false
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+  group-configs:
+    - group: funasr
+      display-name: FunASR 实时识别
+      paths-to-match: /api/funasr/**
+      packages-to-scan: com.openlinkhub.digitalhuman.funasr.controller
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+    swagger-model-name: 接口模型
