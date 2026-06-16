@@ -24,14 +24,15 @@ OpenLinkHub DigitalHuman 是 OpenLinkHub 生态中的实时语音交互与数字
 - Vue 浏览器麦克风采集。
 - 基于 `AudioWorklet` 的 `16kHz mono PCM Int16` 实时音频流。
 - Spring Boot WebSocket 实时音频帧入口。
-- DashScope FunASR 实时识别适配器。
+- DashScope FunASR 作为当前 ASR Provider。
+- ASR final 文本自动调用 LightRAG 生成回答，并在前端流式展示。
 - 保留 REST 文件上传识别，便于测试。
 - 后端 API 集成 Knife4j/OpenAPI 文档。
 
-ASR 服务位置：
+数字人运行时服务位置：
 
 ```text
-services/asr/dashscope-funasr-realtime
+services/runtime/digital-human-runtime
 ```
 
 Vue 实时语音前端位置：
@@ -47,8 +48,8 @@ OpenLinkHub-DigitalHuman/
 ├── apps/
 │   └── web-digital-human/                 # Vue 前端：实时语音、字幕、未来数字人展示
 ├── services/
-│   └── asr/
-│       └── dashscope-funasr-realtime/      # Spring Boot ASR 服务，DashScope FunASR 适配器
+│   └── runtime/
+│       └── digital-human-runtime/         # Spring Boot 数字人运行时：ASR、RAG、TTS 和会话编排
 ├── packages/                               # 前端共享包、SDK、UI 组件
 ├── shared/                                 # 共享协议、Schema、Prompt、跨服务契约
 ├── docs/
@@ -70,8 +71,8 @@ OpenLinkHub-DigitalHuman/
 
 | 规划服务 | 建议路径 | 职责 |
 |---|---|---|
-| ASR 适配服务 | `services/asr/dashscope-funasr-realtime` | 实时 ASR WebSocket、REST 识别、Provider 适配边界 |
-| 实时对话编排服务 | `services/conversation/realtime-orchestrator` | 会话状态、打断控制、ASR/LLM/TTS 编排 |
+| 数字人运行时服务 | `services/runtime/digital-human-runtime` | 实时 WebSocket、ASR、RAG、后续 TTS、会话状态和 Provider 编排 |
+| 独立对话编排服务 | `services/conversation/realtime-orchestrator` | 当 runtime 服务变大后，可拆出的会话状态、打断控制、ASR/LLM/TTS 编排服务 |
 | 工具网关服务 | `services/tools/openlinkhub-tool-gateway` | OpenLinkHub 设备、告警、任务、大屏和业务 API 调用 |
 | API Gateway/BFF | `services/gateway/digital-human-gateway` | 面向前端的 API 聚合、鉴权、路由和协议兼容 |
 
@@ -181,17 +182,17 @@ ASR Provider 可包括：
 
 ## 本地开发
 
-### 启动 ASR 后端
+### 启动数字人运行时后端
 
 ```bash
-cd services/asr/dashscope-funasr-realtime
+cd services/runtime/digital-human-runtime
 mvn spring-boot:run
 ```
 
 本地 API Key 放在被忽略的外部配置文件中：
 
 ```text
-services/asr/dashscope-funasr-realtime/config/application-prod.yml
+services/runtime/digital-human-runtime/config/application-prod.yml
 ```
 
 不要提交本地密钥。
@@ -213,13 +214,13 @@ http://localhost:5173/
 前端默认 WebSocket 地址：
 
 ```text
-ws://localhost:8080/ws/funasr/realtime
+ws://localhost:8080/ws/runtime/conversation
 ```
 
 需要时可覆盖：
 
 ```bash
-VITE_FUNASR_WS_URL=ws://localhost:8080/ws/funasr/realtime npm run dev
+VITE_RUNTIME_WS_URL=ws://localhost:8080/ws/runtime/conversation npm run dev
 ```
 
 ## 安全说明
@@ -265,10 +266,10 @@ The first implemented capability is realtime ASR:
 - REST upload recognition retained for file-based testing.
 - Knife4j/OpenAPI documentation for backend APIs.
 
-The ASR service is located at:
+The digital human runtime service is located at:
 
 ```text
-services/asr/dashscope-funasr-realtime
+services/runtime/digital-human-runtime
 ```
 
 The Vue realtime voice frontend is located at:
@@ -284,8 +285,8 @@ OpenLinkHub-DigitalHuman/
 ├── apps/
 │   └── web-digital-human/                 # Vue frontend for realtime voice and future avatar UI
 ├── services/
-│   └── asr/
-│       └── dashscope-funasr-realtime/      # Spring Boot ASR service, DashScope FunASR adapter
+│   └── runtime/
+│       └── digital-human-runtime/         # Spring Boot runtime for ASR, RAG, TTS, and conversation orchestration
 ├── packages/                               # Shared frontend packages, SDKs, UI components
 ├── shared/                                 # Shared contracts, schemas, prompts, protocol definitions
 ├── docs/
@@ -307,8 +308,8 @@ OpenLinkHub-DigitalHuman/
 
 | Planned Service | Suggested Path | Responsibility |
 |---|---|---|
-| ASR adapter service | `services/asr/dashscope-funasr-realtime` | Realtime ASR WebSocket, REST recognition, provider adapter boundary |
-| Realtime conversation service | `services/conversation/realtime-orchestrator` | Session state, interruption, ASR/LLM/TTS coordination |
+| Digital human runtime service | `services/runtime/digital-human-runtime` | Realtime WebSocket, ASR, RAG, future TTS, session state, and provider orchestration |
+| Standalone conversation service | `services/conversation/realtime-orchestrator` | A future split-out service for session state, interruption, and ASR/LLM/TTS coordination when the runtime grows |
 | Tool gateway service | `services/tools/openlinkhub-tool-gateway` | OpenLinkHub device, alarm, task, dashboard, and business API tool calls |
 | API gateway/BFF | `services/gateway/digital-human-gateway` | Frontend-facing API aggregation, auth, routing, protocol compatibility |
 
@@ -374,6 +375,7 @@ Binary audio frames are sent as PCM, and recognition events are returned as norm
 - DashScope FunASR as the first ASR adapter.
 - Add VAD for speech start/end detection.
 - Add LLM streaming responses with OpenAI-compatible APIs.
+- Query LightRAG from final ASR text and stream answers back to the frontend.
 - Add TTS streaming output.
 - Support user interruption while the assistant is speaking.
 - Maintain per-session state: `IDLE`, `LISTENING`, `THINKING`, `SPEAKING`, `INTERRUPTED`, `ERROR`.
@@ -418,17 +420,17 @@ Binary audio frames are sent as PCM, and recognition events are returned as norm
 
 ## Local Development
 
-### Start ASR Backend
+### Start Digital Human Runtime Backend
 
 ```bash
-cd services/asr/dashscope-funasr-realtime
+cd services/runtime/digital-human-runtime
 mvn spring-boot:run
 ```
 
 Keep local API keys in an ignored external config file:
 
 ```text
-services/asr/dashscope-funasr-realtime/config/application-prod.yml
+services/runtime/digital-human-runtime/config/application-prod.yml
 ```
 
 Do not commit local secrets.
@@ -450,13 +452,13 @@ http://localhost:5173/
 The default frontend WebSocket URL is:
 
 ```text
-ws://localhost:8080/ws/funasr/realtime
+ws://localhost:8080/ws/runtime/conversation
 ```
 
 Override it when needed:
 
 ```bash
-VITE_FUNASR_WS_URL=ws://localhost:8080/ws/funasr/realtime npm run dev
+VITE_RUNTIME_WS_URL=ws://localhost:8080/ws/runtime/conversation npm run dev
 ```
 
 ## Security Notes

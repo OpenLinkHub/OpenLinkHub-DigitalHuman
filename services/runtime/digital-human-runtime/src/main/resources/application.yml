@@ -1,0 +1,57 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: digital-human-runtime
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+  profiles:
+    active: prod
+
+dashscope:
+  funasr:
+    model: fun-asr-realtime
+    format: pcm
+    sample-rate: 16000
+    chunk-size-bytes: 3200
+    frame-interval-ms: 100
+    callback-timeout-seconds: 60
+    disfluency-removal-enabled: false
+  tts:
+    enabled: true
+    model: cosyvoice-v3.5-plus
+    voice: cosyvoice-v3.5-plus-bailian-32ebf457e9394a56aea45a9af920fe23
+    format: MP3_22050HZ_MONO_256KBPS
+    volume: 50
+    speech-rate: 1.0
+    pitch-rate: 1.0
+    timeout-seconds: 60
+
+lightrag:
+  base-url: http://127.0.0.1:9621
+  stream-path: /query/stream
+  query-mode: mix
+  response-type: Multiple Paragraphs
+  include-references: true
+  connect-timeout: 5s
+  request-timeout: 120s
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+  group-configs:
+    - group: runtime
+      display-name: 数字人运行时
+      paths-to-match: /api/runtime/**
+      packages-to-scan: com.openlinkhub.digitalhuman.runtime.api.rest
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+    swagger-model-name: 接口模型
