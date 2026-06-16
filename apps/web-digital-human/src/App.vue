@@ -146,6 +146,11 @@
           />
         </div>
         <p class="live-caption">{{ liveText || '实时字幕会显示在这里' }}</p>
+        <div class="intent-result">
+          <span>{{ intentStatusText }}</span>
+          <strong>{{ intentResult.name || '等待识别' }}</strong>
+          <small>{{ intentResult.detail || '识别结果会显示在这里' }}</small>
+        </div>
       </section>
 
       <section class="signal-card">
@@ -168,10 +173,10 @@
               <p>{{ lastQuestion || '等待完整句子' }}</p>
             </div>
           </li>
-          <li :class="{ active: answerState === 'querying', done: answerState === 'completed' }">
+          <li :class="{ active: answerState === 'querying' || answerState === 'handled', done: answerState === 'completed' }">
             <span>3</span>
             <div>
-              <strong>RAG 问答</strong>
+              <strong>意图处理</strong>
               <p>{{ answerStatusText }}</p>
             </div>
           </li>
@@ -189,8 +194,17 @@
           <span>Shift Enter</span>
           <p>输入换行</p>
           <span>Voice</span>
-          <p>语音识别后自动查询知识库</p>
+          <p>语音识别后自动判断指令、工具或知识库</p>
         </div>
+        <button
+          class="tts-toggle"
+          :data-enabled="ttsEnabled"
+          type="button"
+          @click="toggleTts"
+        >
+          <span />
+          TTS {{ ttsEnabled ? '开启' : '关闭' }}
+        </button>
       </section>
     </aside>
   </main>
@@ -233,6 +247,9 @@ const errorMessage = ref('');
 const liveText = ref('');
 const lastQuestion = ref('');
 const answerState = ref('idle');
+const intentStatusText = ref('等待意图识别');
+const intentResult = ref({ name: '', detail: '' });
+const ttsEnabled = ref(true);
 const level = ref(0);
 const socket = ref(null);
 const streamer = ref(null);
@@ -249,6 +266,7 @@ const answerStatusText = computed(() => {
   const labels = {
     idle: '待机',
     querying: '检索与生成中',
+    handled: '已处理',
     completed: '已完成',
     error: '异常'
   };
@@ -307,15 +325,17 @@ async function sendTextQuestion() {
     return;
   }
 
+  stopCurrentPlayback();
   draft.value = '';
   appendUserMessage(question);
   liveText.value = '';
   lastQuestion.value = question;
+  intentStatusText.value = '正在判断处理类型';
   errorMessage.value = '';
 
   try {
     const ws = await ensureSocket();
-    ws.send(JSON.stringify({ type: 'query', question }));
+    ws.send(JSON.stringify({ type: 'query', question, ttsEnabled: ttsEnabled.value }));
   } catch (error) {
     connectionState.value = 'error';
     errorMessage.value = error?.message || '无法发送问题。';
@@ -331,14 +351,16 @@ async function toggleRecording() {
 }
 
 async function startConversation() {
+  stopCurrentPlayback();
   errorMessage.value = '';
   liveText.value = '';
   answerState.value = 'idle';
+  intentStatusText.value = '等待意图识别';
   connectionState.value = 'connecting';
 
   try {
     const ws = await ensureSocket();
-    ws.send(JSON.stringify({ type: 'start', sampleRate: 16000 }));
+    ws.send(JSON.stringify({ type: 'start', sampleRate: 16000, ttsEnabled: ttsEnabled.value }));
 
     streamer.value = new PcmAudioStreamer({
       onAudioFrame: (frame) => {
@@ -415,11 +437,15 @@ function handleServerMessage(event) {
   } else if (message.type === 'recognition') {
     liveText.value = message.text || liveText.value;
     if (message.sentenceEnd && message.text) {
+      stopCurrentPlayback();
       lastQuestion.value = message.text;
       appendUserMessage(message.text);
     }
+  } else if (message.type === 'intent_result') {
+    applyIntentResult(message);
   } else if (message.type === 'answer_started') {
     lastQuestion.value = message.question || lastQuestion.value;
+    intentStatusText.value = '处理类型：知识库查询';
     answerState.value = 'querying';
     activeAssistantMessageId.value = appendAssistantMessage('', 'streaming');
   } else if (message.type === 'answer_delta') {
@@ -428,10 +454,28 @@ function handleServerMessage(event) {
   } else if (message.type === 'answer_completed') {
     completeAssistantMessage(message.text);
     answerState.value = 'completed';
+  } else if (message.type === 'command_result') {
+    intentStatusText.value = `处理类型：指令执行 / ${message.command || 'command'}`;
+    appendAssistantMessage(message.text || '指令已接收。');
+    answerState.value = 'handled';
+  } else if (message.type === 'tool_result') {
+    intentStatusText.value = `处理类型：内置工具 / ${message.intent || 'tool'}`;
+    appendAssistantMessage(message.text || '工具调用已完成。');
+    answerState.value = 'handled';
+  } else if (message.type === 'rag_rejected') {
+    intentStatusText.value = '处理类型：知识库查询 / 未发送';
+    appendAssistantMessage(message.text || '知识库查询内容太短，请补充完整问题。', 'error');
+    answerState.value = 'error';
   } else if (message.type === 'tts_started') {
     updateLatestAssistantMessage((target) => {
       target.ttsState = 'synthesizing';
     });
+  } else if (message.type === 'tts_config') {
+    ttsEnabled.value = Boolean(message.enabled);
+  } else if (message.type === 'tts_stop') {
+    stopCurrentPlayback();
+    appendAssistantMessage(message.text || '已停止播报。');
+    answerState.value = 'handled';
   } else if (message.type === 'tts_audio') {
     attachAndPlayAudio(message.audio, message.mimeType);
   } else if (message.type === 'tts_skipped') {
@@ -445,13 +489,47 @@ function handleServerMessage(event) {
     errorMessage.value = message.message || 'TTS 语音合成异常。';
   } else if (message.type === 'answer_error') {
     answerState.value = 'error';
-    completeAssistantMessage(message.message || 'LightRAG 问答异常。', 'error');
     errorMessage.value = message.message || 'LightRAG 问答异常。';
+    completeAssistantMessage(errorMessage.value, 'error');
   } else if (message.type === 'answer_skipped') {
     errorMessage.value = '当前回答仍在生成，请稍后再问。';
+    appendAssistantMessage(errorMessage.value, 'error');
   } else if (message.type === 'error') {
     connectionState.value = 'error';
     errorMessage.value = message.message || '数字人运行时异常。';
+    appendAssistantMessage(errorMessage.value, 'error');
+  }
+}
+
+function applyIntentResult(message) {
+  const labels = {
+    COMMAND: '指令执行',
+    DATE_TIME: '日期时间',
+    WEATHER: '天气工具',
+    RAG: '知识库查询'
+  };
+  const kind = message.kind || '';
+  const slots = formatSlots(message.slots);
+  intentStatusText.value = `意图识别：${labels[kind] || kind || '未知'}`;
+  intentResult.value = {
+    name: message.name || 'unknown',
+    detail: slots ? `参数：${slots}` : `文本：${message.normalizedText || lastQuestion.value || '-'}`
+  };
+}
+
+function formatSlots(slots) {
+  if (!slots || typeof slots !== 'object') {
+    return '';
+  }
+  return Object.entries(slots)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('，');
+}
+
+async function toggleTts() {
+  ttsEnabled.value = !ttsEnabled.value;
+  if (socket.value?.readyState === WebSocket.OPEN) {
+    socket.value.send(JSON.stringify({ type: 'config', ttsEnabled: ttsEnabled.value }));
   }
 }
 
@@ -490,6 +568,9 @@ function appendAssistantMessage(content, status = 'completed') {
     status,
     time: formatTime()
   });
+  if (status === 'completed') {
+    lastCompletedAssistantMessageId.value = id;
+  }
   scrollToBottom();
   return id;
 }
@@ -513,6 +594,8 @@ function completeAssistantMessage(content, status = 'completed') {
     applyAssistantAnswerParts(target, rawContent);
     target.status = status;
     lastCompletedAssistantMessageId.value = target.id;
+  } else if (content) {
+    appendAssistantMessage(content, status);
   }
   activeAssistantMessageId.value = null;
   scrollToBottom();
@@ -539,6 +622,16 @@ function attachAndPlayAudio(base64Audio, mimeType = 'audio/mpeg') {
     target.audioUrl = audioBlobUrl(base64Audio, mimeType);
     target.ttsState = 'ready';
     playMessageAudio(target);
+  });
+}
+
+function stopCurrentPlayback() {
+  currentAudio.value?.pause();
+  currentAudio.value = null;
+  messages.value.forEach((message) => {
+    if (message.ttsState === 'playing' || message.ttsState === 'ready') {
+      message.ttsState = 'ended';
+    }
   });
 }
 
@@ -626,6 +719,8 @@ function clearMessages() {
   liveText.value = '';
   lastQuestion.value = '';
   answerState.value = 'idle';
+  intentStatusText.value = '等待意图识别';
+  intentResult.value = { name: '', detail: '' };
   errorMessage.value = '';
   activeAssistantMessageId.value = null;
   lastCompletedAssistantMessageId.value = null;
@@ -657,9 +752,13 @@ function resizeComposer(event) {
 
 function scrollToBottom() {
   nextTick(() => {
-    if (messageViewport.value) {
-      messageViewport.value.scrollTop = messageViewport.value.scrollHeight;
-    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (messageViewport.value) {
+          messageViewport.value.scrollTop = messageViewport.value.scrollHeight;
+        }
+      });
+    });
   });
 }
 

@@ -8,6 +8,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openlinkhub.digitalhuman.runtime.config.FunAsrProperties;
 import com.openlinkhub.digitalhuman.runtime.common.exception.FunAsrException;
+import com.openlinkhub.digitalhuman.runtime.orchestration.ConversationOrchestrator;
+import com.openlinkhub.digitalhuman.runtime.orchestration.ConversationResponseSink;
 import com.openlinkhub.digitalhuman.runtime.rag.RagAnswerService;
 import com.openlinkhub.digitalhuman.runtime.rag.RagAnswerSink;
 import com.openlinkhub.digitalhuman.runtime.tts.AnswerTextExtractor;
@@ -25,6 +27,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class RealtimeConversationSession {
 
@@ -32,12 +35,15 @@ public class RealtimeConversationSession {
     private final FunAsrProperties properties;
     private final RagAnswerService ragAnswerService;
     private final TtsService ttsService;
+    private final ConversationOrchestrator conversationOrchestrator;
     private final ObjectMapper objectMapper;
     private final Object sendLock = new Object();
     private final ExecutorService answerExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean stopped = new AtomicBoolean(false);
     private final AtomicBoolean answering = new AtomicBoolean(false);
+    private final AtomicBoolean ttsEnabled = new AtomicBoolean(true);
+    private final AtomicLong ttsGeneration = new AtomicLong(0);
 
     private Recognition recognition;
 
@@ -46,12 +52,14 @@ public class RealtimeConversationSession {
             FunAsrProperties properties,
             RagAnswerService ragAnswerService,
             TtsService ttsService,
+            ConversationOrchestrator conversationOrchestrator,
             ObjectMapper objectMapper
     ) {
         this.webSocketSession = webSocketSession;
         this.properties = properties;
         this.ragAnswerService = ragAnswerService;
         this.ttsService = ttsService;
+        this.conversationOrchestrator = conversationOrchestrator;
         this.objectMapper = objectMapper;
     }
 
@@ -67,7 +75,7 @@ public class RealtimeConversationSession {
         int effectiveSampleRate = sampleRate != null && sampleRate > 0 ? sampleRate : properties.sampleRate();
         recognition = new Recognition();
         recognition.call(buildParam(effectiveSampleRate), new StreamingCallback());
-        sendJson(Map.of(
+        sendJson(payload(
                 "type", "started",
                 "sampleRate", effectiveSampleRate,
                 "format", "pcm"
@@ -91,11 +99,22 @@ public class RealtimeConversationSession {
     }
 
     public void query(String question) {
-        if (question == null || question.isBlank()) {
+        if (question == null || question.trim().isEmpty()) {
             sendError("Question is empty.");
             return;
         }
-        queryRagAnswer(question.trim());
+        handleRecognizedText(question.trim());
+    }
+
+    public void updateTtsEnabled(Boolean enabled) {
+        if (enabled == null) {
+            return;
+        }
+        ttsEnabled.set(enabled.booleanValue());
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        payload.put("type", "tts_config");
+        payload.put("enabled", enabled.booleanValue());
+        sendJson(payload);
     }
 
     public void close() {
@@ -113,21 +132,21 @@ public class RealtimeConversationSession {
                 .sampleRate(sampleRate)
                 .disfluencyRemovalEnabled(properties.disfluencyRemovalEnabled());
 
-        if (properties.phraseId() != null && !properties.phraseId().isBlank()) {
+        if (properties.phraseId() != null && !properties.phraseId().trim().isEmpty()) {
             builder.phraseId(properties.phraseId());
         }
-        if (properties.vocabularyId() != null && !properties.vocabularyId().isBlank()) {
+        if (properties.vocabularyId() != null && !properties.vocabularyId().trim().isEmpty()) {
             builder.vocabularyId(properties.vocabularyId());
         }
         return builder.build();
     }
 
     private void sendStatus(String status) {
-        sendJson(Map.of("type", "status", "status", status));
+        sendJson(payload("type", "status", "status", status));
     }
 
     private void sendError(String message) {
-        sendJson(Map.of("type", "error", "message", message));
+        sendJson(payload("type", "error", "message", message));
     }
 
     private void sendJson(Map<String, ?> payload) {
@@ -165,14 +184,14 @@ public class RealtimeConversationSession {
             payload.put("sentenceEnd", result.isSentenceEnd());
             payload.put("completeResult", result.isCompleteResult());
             sendJson(payload);
-            if (result.isSentenceEnd() && result.getSentence().getText() != null && !result.getSentence().getText().isBlank()) {
-                queryRagAnswer(result.getSentence().getText());
+            if (result.isSentenceEnd() && result.getSentence().getText() != null && !result.getSentence().getText().trim().isEmpty()) {
+                handleRecognizedText(result.getSentence().getText());
             }
         }
 
         @Override
         public void onComplete() {
-            sendJson(Map.of("type", "completed"));
+            sendJson(payload("type", "completed"));
         }
 
         @Override
@@ -183,34 +202,63 @@ public class RealtimeConversationSession {
 
     private void queryRagAnswer(String question) {
         if (!answering.compareAndSet(false, true)) {
-            sendJson(Map.of("type", "answer_skipped", "reason", "answer_in_progress"));
+            sendJson(payload("type", "answer_skipped", "reason", "answer_in_progress"));
             return;
         }
         answerExecutor.submit(() -> ragAnswerService.streamAnswer(question, new WebSocketRagAnswerSink()));
+    }
+
+    private void handleRecognizedText(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return;
+        }
+        ttsGeneration.incrementAndGet();
+        conversationOrchestrator.handle(text.trim(), new WebSocketConversationResponseSink());
+    }
+
+    private final class WebSocketConversationResponseSink implements ConversationResponseSink {
+
+        @Override
+        public void sendEvent(Map<String, ?> event) {
+            if ("tts_stop".equals(event.get("type"))) {
+                ttsGeneration.incrementAndGet();
+            }
+            sendJson(event);
+        }
+
+        @Override
+        public void queryRag(String question) {
+            queryRagAnswer(question);
+        }
+
+        @Override
+        public void speak(String text) {
+            answerExecutor.submit(() -> synthesizePlainText(text));
+        }
     }
 
     private final class WebSocketRagAnswerSink implements RagAnswerSink {
 
         @Override
         public void onStart(String question) {
-            sendJson(Map.of("type", "answer_started", "question", question));
+            sendJson(payload("type", "answer_started", "question", question));
         }
 
         @Override
         public void onDelta(String delta) {
-            sendJson(Map.of("type", "answer_delta", "text", delta));
+            sendJson(payload("type", "answer_delta", "text", delta));
         }
 
         @Override
         public void onCompleted(String answer) {
-            sendJson(Map.of("type", "answer_completed", "text", answer));
+            sendJson(payload("type", "answer_completed", "text", answer));
             answering.set(false);
             synthesizeAnswer(answer);
         }
 
         @Override
         public void onError(String message) {
-            sendJson(Map.of("type", "answer_error", "message", message));
+            sendJson(payload("type", "answer_error", "message", message));
             answering.set(false);
         }
     }
@@ -221,24 +269,43 @@ public class RealtimeConversationSession {
         }
         AnswerTextExtractor.ExtractedAnswer extractedAnswer = AnswerTextExtractor.extract(answer);
         String speechText = extractedAnswer.speechText();
-        if (speechText == null || speechText.isBlank()) {
-            sendJson(Map.of("type", "tts_skipped", "reason", "empty_speech_text"));
+        synthesizePlainText(speechText);
+    }
+
+    private void synthesizePlainText(String speechText) {
+        if (!ttsEnabled.get() || !ttsService.isEnabled()) {
+            return;
+        }
+        long generation = ttsGeneration.get();
+        if (speechText == null || speechText.trim().isEmpty()) {
+            sendJson(payload("type", "tts_skipped", "reason", "empty_speech_text"));
             return;
         }
         try {
-            sendJson(Map.of("type", "tts_started", "text", speechText));
+            sendJson(payload("type", "tts_started", "text", speechText));
             TtsAudio audio = ttsService.synthesize(speechText);
-            sendJson(Map.of(
+            if (generation != ttsGeneration.get()) {
+                return;
+            }
+            sendJson(payload(
                     "type", "tts_audio",
                     "mimeType", audio.mimeType(),
                     "format", audio.format(),
                     "audio", Base64.getEncoder().encodeToString(audio.bytes())
             ));
         } catch (RuntimeException exception) {
-            sendJson(Map.of(
+            sendJson(payload(
                     "type", "tts_error",
                     "message", exception.getMessage()
             ));
         }
+    }
+
+    private Map<String, Object> payload(Object... keysAndValues) {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        for (int index = 0; index + 1 < keysAndValues.length; index += 2) {
+            payload.put(String.valueOf(keysAndValues[index]), keysAndValues[index + 1]);
+        }
+        return payload;
     }
 }

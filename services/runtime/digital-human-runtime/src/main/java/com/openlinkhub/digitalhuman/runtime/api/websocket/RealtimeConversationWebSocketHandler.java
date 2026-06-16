@@ -2,6 +2,7 @@ package com.openlinkhub.digitalhuman.runtime.api.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openlinkhub.digitalhuman.runtime.config.FunAsrProperties;
+import com.openlinkhub.digitalhuman.runtime.orchestration.ConversationOrchestrator;
 import com.openlinkhub.digitalhuman.runtime.rag.RagAnswerService;
 import com.openlinkhub.digitalhuman.runtime.tts.TtsService;
 import org.springframework.stereotype.Component;
@@ -21,6 +22,7 @@ public class RealtimeConversationWebSocketHandler extends BinaryWebSocketHandler
     private final FunAsrProperties properties;
     private final RagAnswerService ragAnswerService;
     private final TtsService ttsService;
+    private final ConversationOrchestrator conversationOrchestrator;
     private final ObjectMapper objectMapper;
     private final Map<String, RealtimeConversationSession> sessions = new ConcurrentHashMap<>();
 
@@ -28,17 +30,19 @@ public class RealtimeConversationWebSocketHandler extends BinaryWebSocketHandler
             FunAsrProperties properties,
             RagAnswerService ragAnswerService,
             TtsService ttsService,
+            ConversationOrchestrator conversationOrchestrator,
             ObjectMapper objectMapper
     ) {
         this.properties = properties;
         this.ragAnswerService = ragAnswerService;
         this.ttsService = ttsService;
+        this.conversationOrchestrator = conversationOrchestrator;
         this.objectMapper = objectMapper;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
-        sessions.put(session.getId(), new RealtimeConversationSession(session, properties, ragAnswerService, ttsService, objectMapper));
+        sessions.put(session.getId(), new RealtimeConversationSession(session, properties, ragAnswerService, ttsService, conversationOrchestrator, objectMapper));
     }
 
     @Override
@@ -55,11 +59,15 @@ public class RealtimeConversationWebSocketHandler extends BinaryWebSocketHandler
             return;
         }
         if (controlMessage.isStart()) {
+            streamingSession.updateTtsEnabled(controlMessage.ttsEnabled());
             streamingSession.start(controlMessage.sampleRate());
         } else if (controlMessage.isStop()) {
             streamingSession.stop();
         } else if (controlMessage.isQuery()) {
+            streamingSession.updateTtsEnabled(controlMessage.ttsEnabled());
             streamingSession.query(controlMessage.question());
+        } else if (controlMessage.isConfig()) {
+            streamingSession.updateTtsEnabled(controlMessage.ttsEnabled());
         }
     }
 

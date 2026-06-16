@@ -13,12 +13,13 @@ class StreamingControlMessageTest {
     void parsesStartMessageWithSampleRate() throws Exception {
         StreamingControlMessage message = StreamingControlMessage.parse(
                 objectMapper,
-                "{\"type\":\"start\",\"sampleRate\":16000}"
+                "{\"type\":\"start\",\"sampleRate\":16000,\"ttsEnabled\":false}"
         );
 
         assertThat(message.isStart()).isTrue();
         assertThat(message.isStop()).isFalse();
         assertThat(message.sampleRate()).isEqualTo(16000);
+        assertThat(message.ttsEnabled()).isFalse();
         assertThat(message.question()).isNull();
     }
 
@@ -39,5 +40,17 @@ class StreamingControlMessageTest {
 
         assertThat(message.isQuery()).isTrue();
         assertThat(message.question()).isEqualTo("什么是 OpenLinkHub？");
+        assertThat(message.ttsEnabled()).isNull();
+    }
+
+    @Test
+    void parsesConfigMessageWithTtsToggle() throws Exception {
+        StreamingControlMessage message = StreamingControlMessage.parse(
+                objectMapper,
+                "{\"type\":\"config\",\"ttsEnabled\":true}"
+        );
+
+        assertThat(message.isConfig()).isTrue();
+        assertThat(message.ttsEnabled()).isTrue();
     }
 }
