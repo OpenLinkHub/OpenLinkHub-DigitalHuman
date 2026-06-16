@@ -1,0 +1,12 @@
+---
+description: Git 提交规范，禁止添加 AI 协作者署名
+alwaysApply: true
+---
+
+# Git 提交规范
+
+执行 `git commit` 时：
+
+- **禁止**在提交信息中添加 `Co-authored-by`、`Co-Authored-By` 或任何 AI/Agent 署名（如 `Cursor <cursoragent@cursor.com>`、Claude、Copilot 等）
+- 提交作者仅使用仓库配置的用户信息，不要追加协作者 trailer
+- 提交信息只包含标题与必要的变更说明
